@@ -1,0 +1,18 @@
+cos_lr: false
+download: false
+mask_ratio: 4
+max_det: 300
+names:
+- 0ug
+- 40ug
+- 80ug
+- 120ug
+- 160ug
+- 200ug
+nc: 6
+overlap_mask: true
+path: E:\concentration-detection\processed_data
+rect: false
+test: images/test
+train: images/train
+val: images/val

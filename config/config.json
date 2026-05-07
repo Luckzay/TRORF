@@ -1,0 +1,47 @@
+{
+    "data": {
+        "raw_data_dir": "data",
+        "annotations_dir": "data/Annotations",
+        "images_dir": "data/JPEGImages",
+        "processed_data_dir": "processed_data",
+        "labels_dir": "processed_data/labels",
+        "images_output_dir": "processed_data/images"
+    },
+    "model": {
+        "type": "models/yolov8n.pt",
+        "num_classes": 6,
+        "class_names": ["0ug", "40ug", "80ug", "120ug", "160ug", "200ug"],
+        "concentration_values": [0.0, 40.0, 80.0, 120.0, 160.0, 200.0]
+    },
+    "training": {
+        "epochs": 20,
+        "imgsz": 416,
+        "batch_size": 4,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0005,
+        "momentum": 0.9
+    },
+    "inference": {
+        "conf_threshold": 0.5
+    },
+    "data_split": {
+        "train_ratio": 0.7,
+        "val_ratio": 0.2,
+        "test_ratio": 0.1
+    },
+    "paths": {
+        "model_save_path": "train/runs/concentration_detection/weights/best.pt",
+        "data_config_path": "data_config.yaml",
+        "results_dir": "results"
+    },
+    "gpu": {
+        "use_gpu": true,
+        "device_id": 0,
+        "batch_size_multiplier": 2,
+        "pin_memory": true,
+        "num_workers": 0,
+        "memory_fraction": 0.8,
+        "benchmark": true,
+        "deterministic": false
+    }
+}
