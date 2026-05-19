@@ -476,15 +476,7 @@ python train/concentration_regression_train.py
 
 #### 5. 预测推理
 
-**单张图像预测**:
-```bash
-python predict/single_infer.py --image path/to/image.jpg
-```
-
-**批量预测**:
-```bash
-python predict/predict.py --dir path/to/images
-```
+使用predict/predict.py文件，切换不同模式完成预测推理
 
 ---
 
