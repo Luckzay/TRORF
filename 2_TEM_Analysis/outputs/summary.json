@@ -1,0 +1,26 @@
+{
+  "particle_count": 95,
+  "mean_diameter_nm": 29.621052631578948,
+  "median_diameter_nm": 25.0,
+  "std_diameter_nm": 11.16551391597533,
+  "min_diameter_nm": 10.0,
+  "max_diameter_nm": 73.5,
+  "scale_nm": 100.0,
+  "scale_px": 100.0,
+  "nm_per_pixel": 1.0,
+  "model_info": {
+    "model_type": "opencv_contour_baseline",
+    "description": "OpenCV contour detector baseline for TEM particle analysis",
+    "version": "1.0.0",
+    "trained": false,
+    "note": "示例基线配置文件。真实项目可替换为 YOLO/CNN 训练权重。",
+    "preprocess": [
+      "grayscale",
+      "CLAHE",
+      "GaussianBlur"
+    ],
+    "detector": "Otsu threshold + contour filtering",
+    "default_scale_nm": 100.0,
+    "default_scale_px": 100.0
+  }
+}
