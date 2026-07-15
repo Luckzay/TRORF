@@ -377,6 +377,260 @@ class YOLO(object):
 
         return image
 
+    #---------------------------------------------------#
+    #   TEM微粒检测：YOLO检测 + 粒径指标计算
+    #   参考 detect_image_with_concentration 结构，
+    #   将中间处理改为TEM微粒的粒径、圆度等指标计算
+    #---------------------------------------------------#
+    def detect_tem_particles(self, image, nm_per_pixel=1.0, crop=False, count=False):
+        """
+        使用YOLO检测TEM图像中的微粒，并计算粒径等指标。
+
+        Args:
+            image: PIL Image 输入图像
+            nm_per_pixel: 每像素对应的纳米数 (scale_nm / scale_px)
+            crop: 是否裁剪检测框
+            count: 是否计数
+
+        Returns:
+            (annotated_image, measurements):
+                annotated_image: PIL Image，标注后的图像
+                measurements: List[dict]，每个微粒的测量结果
+        """
+        import cv2
+        import math
+
+        #---------------------------------------------------#
+        #   计算输入图片的高和宽
+        #---------------------------------------------------#
+        image_shape = np.array(np.shape(image)[0:2])
+        #---------------------------------------------------------#
+        #   在这里将图像转换成RGB图像，防止灰度图在预测时报错。
+        #---------------------------------------------------------#
+        image_for_detection = cvtColor(image)
+        #---------------------------------------------------------#
+        #   给图像增加灰条，实现不失真的resize
+        #---------------------------------------------------------#
+        image_data = resize_image(image_for_detection, (self.input_shape[1], self.input_shape[0]), self.letterbox_image)
+        #---------------------------------------------------------#
+        #   添加上batch_size维度
+        #---------------------------------------------------------#
+        image_data = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, dtype='float32')), (2, 0, 1)), 0)
+
+        with torch.no_grad():
+            images = torch.from_numpy(image_data)
+            if self.cuda:
+                images = images.cuda()
+            #---------------------------------------------------------#
+            #   将图像输入网络当中进行预测！
+            #---------------------------------------------------------#
+            outputs = self.net(images)
+            outputs = self.bbox_util.decode_box(outputs)
+            #---------------------------------------------------------#
+            #   将预测框进行堆叠，然后进行非极大抑制
+            #---------------------------------------------------------#
+            results = self.bbox_util.non_max_suppression(outputs, self.num_classes, self.input_shape,
+                        image_shape, self.letterbox_image, conf_thres=self.confidence, nms_thres=self.nms_iou)
+
+            if results[0] is None:
+                return image, []
+
+            top_label = np.array(results[0][:, 5], dtype='int32')
+            top_conf = results[0][:, 4]
+            top_boxes = results[0][:, :4]
+
+        #---------------------------------------------------------#
+        #   设置字体与边框厚度
+        #---------------------------------------------------------#
+        font = ImageFont.truetype(font='model_data/simhei.ttf', size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
+        thickness = int(max((image.size[0] + image.size[1]) // np.mean(self.input_shape), 1))
+
+        #---------------------------------------------------------#
+        #   计数
+        #---------------------------------------------------------#
+        if count:
+            print("top_label:", top_label)
+            classes_nums = np.zeros([self.num_classes])
+            for i in range(self.num_classes):
+                num = np.sum(top_label == i)
+                if num > 0:
+                    print(self.class_names[i], " : ", num)
+                classes_nums[i] = num
+            print("classes_nums:", classes_nums)
+
+        #---------------------------------------------------------#
+        #   是否进行目标的裁剪
+        #---------------------------------------------------------#
+        if crop:
+            for i, c in list(enumerate(top_boxes)):
+                top, left, bottom, right = top_boxes[i]
+                top = max(0, np.floor(top).astype('int32'))
+                left = max(0, np.floor(left).astype('int32'))
+                bottom = min(image.size[1], np.floor(bottom).astype('int32'))
+                right = min(image.size[0], np.floor(right).astype('int32'))
+
+                dir_save_path = "img_crop"
+                if not os.path.exists(dir_save_path):
+                    os.makedirs(dir_save_path)
+                crop_image = image.crop([left, top, right, bottom])
+                crop_image.save(os.path.join(dir_save_path, "crop_" + str(i) + ".png"), quality=95, subsampling=0)
+                print("save crop_" + str(i) + ".png to " + dir_save_path)
+
+        #---------------------------------------------------------#
+        #   TEM微粒测量与图像标注
+        #   对每个检测框计算粒径、圆度等指标
+        #---------------------------------------------------------#
+        measurements = []
+        for i, c in list(enumerate(top_label)):
+            predicted_class = self.class_names[int(c)]
+            box = top_boxes[i]
+            score = top_conf[i]
+
+            top, left, bottom, right = box
+
+            top = max(0, np.floor(top).astype('int32'))
+            left = max(0, np.floor(left).astype('int32'))
+            bottom = min(image.size[1], np.floor(bottom).astype('int32'))
+            right = min(image.size[0], np.floor(right).astype('int32'))
+
+            #---------------------------------------------------------#
+            #   计算TEM微粒指标
+            #---------------------------------------------------------#
+            width_px = right - left
+            height_px = bottom - top
+            diameter_px = (width_px + height_px) / 2.0
+            diameter_nm = diameter_px * nm_per_pixel
+            area_px2 = float(width_px * height_px)
+
+            # 近似圆度（基于检测框长宽比）
+            aspect_ratio = max(width_px, height_px) / max(1, min(width_px, height_px))
+            circularity = 1.0 / aspect_ratio
+
+            particle_id = len(measurements) + 1
+
+            measurements.append({
+                'particle_id': particle_id,
+                'class': predicted_class,
+                'confidence': float(score),
+                'x': int(left),
+                'y': int(top),
+                'width_px': int(width_px),
+                'height_px': int(height_px),
+                'diameter_px': float(diameter_px),
+                'diameter_nm': float(diameter_nm),
+                'area_px2': area_px2,
+                'circularity': float(circularity),
+            })
+
+            #---------------------------------------------------------#
+            #   绘制标注：类别 + 粒径(nm)
+            #---------------------------------------------------------#
+            label = '{} {:.1f}nm'.format(predicted_class, diameter_nm)
+            draw = ImageDraw.Draw(image)
+            label_size = draw.textbbox((0, 0), text=label, font=font)
+
+            if top - label_size[1] >= 0:
+                text_origin = np.array([left, top - label_size[1]])
+            else:
+                text_origin = np.array([left, top + 1])
+
+            for j in range(thickness):
+                draw.rectangle([left + j, top + j, right - j, bottom - j], outline=self.colors[c])
+            draw.rectangle([tuple(text_origin), (text_origin[0] + label_size[-2], text_origin[1] + label_size[-1])], fill=self.colors[c])
+            draw.text(text_origin, label, fill=(0, 0, 0), font=font)
+            del draw
+
+        return image, measurements
+
+    def evaluate_tem(self, test_images_dir, nm_per_pixel=1.0, output_dir=None):
+        """
+        TEM微粒检测批量评估：遍历文件夹，对每张图片执行YOLO检测并汇总粒径统计。
+
+        Args:
+            test_images_dir: 测试图片目录
+            nm_per_pixel: 每像素对应的纳米数 (scale_nm / scale_px)
+            output_dir: 输出目录（可选），若指定则保存标注图和CSV
+
+        Returns:
+            dict: 汇总统计结果
+        """
+        import json
+        import pandas as pd
+
+        if not os.path.exists(test_images_dir):
+            print(f"错误: 测试图片目录不存在 {test_images_dir}")
+            return {}
+
+        # 获取所有测试图片
+        img_names = os.listdir(test_images_dir)
+        img_paths = []
+        for img_name in img_names:
+            if img_name.lower().endswith(
+                    ('.bmp', '.dib', '.png', '.jpg', '.jpeg', '.pbm', '.pgm', '.ppm', '.tif', '.tiff')):
+                img_paths.append(os.path.join(test_images_dir, img_name))
+
+        if not img_paths:
+            print(f"在 {test_images_dir} 中未找到有效的图片文件")
+            return {}
+
+        print(f"开始处理 {len(img_paths)} 张TEM测试图片")
+
+        if output_dir is not None:
+            os.makedirs(output_dir, exist_ok=True)
+
+        all_measurements = []
+        all_diameters_nm = []
+
+        for img_path in img_paths:
+            image = Image.open(img_path)
+            annotated, measurements = self.detect_tem_particles(image, nm_per_pixel=nm_per_pixel)
+
+            if measurements:
+                all_measurements.extend(measurements)
+                for m in measurements:
+                    all_diameters_nm.append(m['diameter_nm'])
+
+            # 保存标注图
+            if output_dir is not None:
+                img_name = os.path.basename(img_path)
+                annotated.save(os.path.join(output_dir, img_name.replace('.jpg', '.png')), quality=95, subsampling=0)
+
+        if not all_measurements:
+            print("未能从任何图片中检测到微粒")
+            return {}
+
+        # 保存CSV
+        if output_dir is not None:
+            df = pd.DataFrame(all_measurements)
+            csv_path = os.path.join(output_dir, "tem_particle_measurements.csv")
+            df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+            print(f"粒径数据已保存至: {csv_path}")
+
+        # 汇总统计
+        summary = {
+            "particle_count": len(all_measurements),
+            "mean_diameter_nm": float(np.mean(all_diameters_nm)),
+            "median_diameter_nm": float(np.median(all_diameters_nm)),
+            "std_diameter_nm": float(np.std(all_diameters_nm, ddof=1)) if len(all_diameters_nm) > 1 else 0.0,
+            "min_diameter_nm": float(np.min(all_diameters_nm)),
+            "max_diameter_nm": float(np.max(all_diameters_nm)),
+            "nm_per_pixel": nm_per_pixel,
+            "image_count": len(img_paths),
+        }
+
+        print(f"\n=== TEM YOLO检测评估结果 ===")
+        print(f"检测微粒总数: {summary['particle_count']}")
+        print(f"平均粒径: {summary['mean_diameter_nm']:.2f} nm")
+        print(f"粒径范围: {summary['min_diameter_nm']:.2f} - {summary['max_diameter_nm']:.2f} nm")
+
+        if output_dir is not None:
+            summary_path = os.path.join(output_dir, "tem_yolo_summary.json")
+            with open(summary_path, 'w', encoding='utf-8') as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+            print(f"汇总结果已保存至: {summary_path}")
+
+        return summary
+
     def evaluate_Fe(self, test_images_dir="../processed_data/images/train"):
         """
         检测图片并返回类别和浓度值列表
